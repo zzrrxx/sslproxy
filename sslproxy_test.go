@@ -1,7 +1,6 @@
 package sslproxy
 
 import (
-	"encoding/hex"
 	"testing"
 )
 
@@ -11,10 +10,12 @@ var cfg = &Config{
 	KeyFile: "D:\\Github\\go\\src\\sslproxy\\certs\\sslproxy.key",
 	OnSSLData: func(outgoing bool, localAddr string, remoteAddr string, data []byte) {
 		if outgoing {
-			println(localAddr + " -> " + remoteAddr + ": " + hex.EncodeToString(data))
+			println(localAddr + " -> " + remoteAddr + ": ")
 		} else {
-			println(localAddr + " <- " + remoteAddr + ": " + hex.EncodeToString(data))
+			println(localAddr + " <- " + remoteAddr + ": ")
 		}
+
+		println(ToHexDump(data))
 	},
 }
 
