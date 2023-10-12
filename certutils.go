@@ -25,7 +25,8 @@ func GenFakeCert(certData []byte) ([]byte, []byte, error) {
 
 	switch tempPubKey := tempCert.PublicKey.(type) {
 	case *rsa.PublicKey:
-		if pk, err := rsa.GenerateKey(rand.Reader, tempPubKey.N.BitLen()); err != nil {
+		// 2048 takes longer time, so use 1024 instead
+		if pk, err := rsa.GenerateKey(rand.Reader, 1024); err != nil {
 			return nil, nil, err
 		} else {
 			fakePubKey = &pk.PublicKey

@@ -3,17 +3,18 @@ package sslproxy
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Config struct {
 	LocalAddr string
-	CertFile string
-	KeyFile  string
 
 	OnSSLData func(outgoing bool, localAddr string, remoteAddr string, data []byte)
 }
@@ -22,25 +23,19 @@ type SSLProxy struct {
 	Cfg *Config
 
 	listener net.Listener
-	cert     tls.Certificate
+	mu sync.Mutex
+	fakeCerts map[string]*tls.Certificate
 }
 
 func NewSSLProxy(cfg *Config) *SSLProxy {
 	return &SSLProxy{
 		Cfg: cfg,
+		fakeCerts: make(map[string]*tls.Certificate),
 	}
 }
 
 func (p *SSLProxy) Start() error {
 	log.Println("Starting")
-
-	cert, err := tls.LoadX509KeyPair(p.Cfg.CertFile, p.Cfg.KeyFile)
-	if err != nil {
-		log.Println("failed to load certificate: " + err.Error())
-		return err
-	}
-	p.cert = cert
-
 	ln, err := net.Listen("tcp", p.Cfg.LocalAddr)
 	if err != nil {
 		log.Println(err.Error())
@@ -142,22 +137,29 @@ func (p *SSLProxy) connectToRemote(target string) (net.Conn, error) {
 	return net.Dial("tcp", target)
 }
 func (p *SSLProxy) proxy(inConn, outConn net.Conn) error {
-	tlsServerConfig := &tls.Config{
-		Certificates:                []tls.Certificate{p.cert},
-		InsecureSkipVerify:          true,
-	}
 	tlsClientConfig := &tls.Config{
 		InsecureSkipVerify: true,
 	}
-	inTlsCon := tls.Server(inConn, tlsServerConfig)
 	outTlsCon := tls.Client(outConn, tlsClientConfig)
+	if err := outTlsCon.Handshake(); err != nil {
+		log.Printf("[%s]TLS handshake with the remote server failed: %s\n", inConn.RemoteAddr().String(), err.Error())
+		return err
+	}
 
-	if err := inTlsCon.Handshake(); err != nil {
+	realServerCert := outTlsCon.ConnectionState().PeerCertificates[0]
+	fakeCert, err := p.genFakeCert(realServerCert.Raw)
+	if err != nil {
 		log.Printf("[%s]TLS handshake with the incoming connection failed: %s\n", inConn.RemoteAddr().String(), err.Error())
 		return err
 	}
-	if err := outTlsCon.Handshake(); err != nil {
-		log.Printf("[%s]TLS handshake with the remote server failed: %s\n", inConn.RemoteAddr().String(), err.Error())
+
+	tlsServerConfig := &tls.Config{
+		Certificates:                []tls.Certificate{*fakeCert},
+		InsecureSkipVerify:          true,
+	}
+	inTlsCon := tls.Server(inConn, tlsServerConfig)
+	if err := inTlsCon.Handshake(); err != nil {
+		log.Printf("[%s]TLS handshake with the incoming connection failed: %s\n", inConn.RemoteAddr().String(), err.Error())
 		return err
 	}
 
@@ -241,4 +243,50 @@ func (p *SSLProxy) isOpErrorTimeout(err error) bool {
 		}
 	}
 	return false
+}
+
+func (p *SSLProxy) genFakeCert(certData []byte) (*tls.Certificate, error) {
+	cc := p.findCertInCache(certData)
+	if cc != nil { // cached cert
+		return cc, nil
+	}
+
+	fakeCert, fakeKey, err := GenFakeCert(certData)
+	if err != nil {
+		return nil, err
+	}
+
+	certPem := pem.EncodeToMemory(&pem.Block{
+		Type:    "CERTIFICATE",
+		Bytes:   fakeCert,
+	})
+	keyPem := pem.EncodeToMemory(&pem.Block{
+		Type: "PRIVATE KEY",
+		Bytes: fakeKey,
+	})
+
+	c, err := tls.X509KeyPair(certPem, keyPem)
+	if err != nil {
+		return nil, err
+	}
+
+	p.cacheCert(certData, &c)
+	return &c, nil
+}
+func (p *SSLProxy) findCertInCache(certData []byte) *tls.Certificate {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	certId := hex.EncodeToString(certData)
+	if c, ok := p.fakeCerts[certId]; ok {
+		return c
+	}
+	return nil
+}
+func (p *SSLProxy) cacheCert(certData []byte, c *tls.Certificate) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	certId := hex.EncodeToString(certData)
+	p.fakeCerts[certId] = c
 }
