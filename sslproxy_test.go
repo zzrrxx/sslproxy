@@ -1,6 +1,7 @@
 package sslproxy
 
 import (
+	"os"
 	"testing"
 )
 
@@ -17,6 +18,16 @@ var cfg = &Config{
 
 		println(ToHexDump(data))
 	},
+}
+
+func TestSSLProxy_GenFakeCert(t *testing.T) {
+	//cert, _ := os.ReadFile("cert.der")
+	//certData, keyData, err := GenFakeCert(cert)
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+	//os.WriteFile("fake.cer", certData, os.ModePerm)
+	//os.WriteFile("fake.key", keyData, os.ModePerm)
 }
 
 func TestSSLProxy_Start(t *testing.T) {
